@@ -1,8 +1,3 @@
-# MI_FACTUR
-Primera compilación Android preparada para GitHub Actions.
-
-## Compilar
-Actions > Build MI_FACTUR APK > Run workflow.
-Cuando finalice, descargar el artefacto `MI_FACTUR-debug-apk`.
-
-Incluye JDK 17, Gradle 8.4, AGP 8.3.2, Kotlin 2.0.21 y pruebas JUnit.
+# MI_FACTUR v3 PDF + QR + XML
+Añade PDF A4, QR tributario y exportación XML a clientes, facturas multilínea, IVA e IRPF.
+El XML es un formato de exportación propio de MI_FACTUR; NO debe confundirse con un registro VERI*FACTU homologado. El QR usa la URL de cotejo de AEAT y debe validarse contra la especificación oficial vigente antes de producción.
