@@ -1,5 +1,8 @@
-# MI_FACTUR 1.0 estable
-Proyecto Android deliberadamente simplificado para priorizar compilación y prueba en teléfono.
-Requisitos: Android Studio actual, JDK 17, compileSdk 35.
-Abrir la carpeta MI_FACTUR y esperar a Gradle Sync. Ejecutar en móvil con Run.
-Esta primera compilación estable incluye clientes, facturas, IVA, IRPF y BigDecimal. PDF/QR/VERI*FACTU se reincorporarán después de validar esta base en el dispositivo.
+# MI_FACTUR
+Primera compilación Android preparada para GitHub Actions.
+
+## Compilar
+Actions > Build MI_FACTUR APK > Run workflow.
+Cuando finalice, descargar el artefacto `MI_FACTUR-debug-apk`.
+
+Incluye JDK 17, Gradle 8.4, AGP 8.3.2, Kotlin 2.0.21 y pruebas JUnit.
