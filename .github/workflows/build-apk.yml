@@ -9,7 +9,8 @@ jobs:
      with: { distribution: temurin, java-version: '17' }
    - uses: gradle/actions/setup-gradle@v4
      with: { gradle-version: '8.4' }
-   - run: gradle assembleDebug
-   - run: cp app/build/outputs/apk/debug/app-debug.apk MI_FACTUR-PDF-QR-XML.apk
+   - name: Compile with detailed errors
+     run: gradle assembleDebug --stacktrace
+   - run: cp app/build/outputs/apk/debug/app-debug.apk MI_FACTUR-CORREGIDO.apk
    - uses: actions/upload-artifact@v4
-     with: { name: MI_FACTUR-PDF-QR-XML-APK, path: MI_FACTUR-PDF-QR-XML.apk }
+     with: { name: MI_FACTUR-CORREGIDO-APK, path: MI_FACTUR-CORREGIDO.apk }
