@@ -36,7 +36,50 @@ class MainActivity:Activity(){
  private fun enc(s:String)=java.net.URLEncoder.encode(s,"UTF-8")
  private fun qr(s:String):Bitmap{val m=QRCodeWriter().encode(s,BarcodeFormat.QR_CODE,180,180);return Bitmap.createBitmap(180,180,Bitmap.Config.RGB_565).apply{for(y in 0 until 180)for(x in 0 until 180)setPixel(x,y,if(m[x,y])Color.BLACK else Color.WHITE)}}
  private fun savePdf(i:Invoice,ls:List<Line>){val doc=PdfDocument();val page=doc.startPage(PdfDocument.PageInfo.Builder(595,842,1).create());val c=page.canvas;val p=Paint(Paint.ANTI_ALIAS_FLAG);fun tx(s:String,y:Float,size:Float=12f){p.color=Color.BLACK;p.textSize=size;c.drawText(s,45f,y,p)};tx("MI_FACTUR - FACTURA",50f,24f);tx("Factura ${i.number} · ${i.date}",85f,15f);tx("Cliente: ${i.client} · ${i.nif}",110f);var y=155f;ls.forEach{tx("${it.desc}  ${it.qty} x ${eur(it.price)}  IVA ${it.vatRate}%",y);y+=25};tx("Base: ${eur(i.base)}",y+20);tx("IVA: ${eur(i.vat)}",y+45);tx("IRPF (${i.irpfRate}%): -${eur(i.irpf)}",y+70);tx("TOTAL: ${eur(i.total)}",y+105,18f);c.drawBitmap(qr(qrUrl(i)),null,RectF(365f,625f,545f,805f),p);doc.finishPage(page);val f=File(cacheDir,"${i.number}.pdf");FileOutputStream(f).use{doc.writeTo(it)};doc.close();saveDocument("${i.number}.pdf",f.readBytes(),"application/pdf")}
- private fun saveXml(i:Invoice,ls:List<Line>){fun x(s:String)=s.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;");val rows=ls.joinToString(""){"<Linea><Descripcion>${x(it.desc)}</Descripcion><Cantidad>${it.qty}</Cantidad><Precio>${round2(it.price)}</Precio><TipoIVA>${it.vatRate}</TipoIVA><Base>${round2(it.base)}</Base><CuotaIVA>${round2(it.vat)}</CuotaIVA></Linea>"};val xml="<?xml version=\"1.0\" encoding=\"UTF-8\"?><Factura><Numero>${x(i.number)}</Numero><Fecha>${x(i.date)}</Fecha><Cliente>${x(i.client)}</Cliente><NIF>${x(i.nif)}</NIF><Lineas>$rows</Lineas><Base>${round2(i.base)}</Base><IVA>${round2(i.vat)}</IVA><IRPF>${round2(i.irpf)}</IRPF><Total>${round2(i.total)}</Total><QR>${x(qrUrl(i))}</QR></Factura>";saveDocument("${i.number}.xml",xml.toByteArray(),"application/xml")}
+ private fun saveXml(i: Invoice, ls: List<Line>) {
+    fun xmlEscape(s: String): String =
+        s.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\"", "&quot;")
+
+    val rows = ls.joinToString("") { line ->
+        """
+        <Linea>
+            <Descripcion>${xmlEscape(line.desc)}</Descripcion>
+            <Cantidad>${line.qty.toPlainString()}</Cantidad>
+            <Precio>${round2(line.price).toPlainString()}</Precio>
+            <TipoIVA>${line.vatRate.toPlainString()}</TipoIVA>
+            <Base>${round2(line.base).toPlainString()}</Base>
+            <CuotaIVA>${round2(line.vat).toPlainString()}</CuotaIVA>
+        </Linea>
+        """.trimIndent()
+    }
+
+    val xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <Factura>
+            <Numero>${xmlEscape(i.number)}</Numero>
+            <Fecha>${xmlEscape(i.date)}</Fecha>
+            <Cliente>${xmlEscape(i.client)}</Cliente>
+            <NIF>${xmlEscape(i.nif)}</NIF>
+            <Lineas>
+                $rows
+            </Lineas>
+            <Base>${round2(i.base).toPlainString()}</Base>
+            <IVA>${round2(i.vat).toPlainString()}</IVA>
+            <IRPF>${round2(i.irpf).toPlainString()}</IRPF>
+            <Total>${round2(i.total).toPlainString()}</Total>
+            <QR>${xmlEscape(qrUrl(i))}</QR>
+        </Factura>
+    """.trimIndent()
+
+    saveDocument(
+        "${i.number}.xml",
+        xml.toByteArray(Charsets.UTF_8),
+        "application/xml"
+    )
+}
  private fun saveDocument(name:String,data:ByteArray,type:String){pendingBytes=data;startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply{addCategory(Intent.CATEGORY_OPENABLE);this.type=type;putExtra(Intent.EXTRA_TITLE,name)},77)}
  override fun onActivityResult(req:Int,res:Int,data:Intent?){super.onActivityResult(req,res,data);if(req==77&&res==RESULT_OK)data?.data?.let{uri->contentResolver.openOutputStream(uri)?.use{it.write(pendingBytes)};toast("Archivo guardado")}}
  private fun form()=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(24,8,24,0)};private fun input(h:String,v:String="")=EditText(this).apply{hint=h;setText(v);setPadding(10,10,10,10)};private fun btn(t:String,a:()->Unit)=Button(this).apply{text=t;setOnClickListener{a()}};private fun toast(t:String)=Toast.makeText(this,t,Toast.LENGTH_LONG).show()}
