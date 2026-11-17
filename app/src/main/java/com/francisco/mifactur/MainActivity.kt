@@ -4,8 +4,10 @@ import android.app.*
 import android.content.*
 import android.database.sqlite.*
 import android.graphics.*
+import android.graphics.drawable.GradientDrawable
 import android.graphics.pdf.PdfDocument
 import android.os.*
+import android.view.*
 import android.widget.*
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
@@ -16,76 +18,356 @@ import java.math.RoundingMode
 import java.text.SimpleDateFormat
 import java.util.*
 
-private fun bd(s:String)=BigDecimal(s.replace(',','.').ifBlank{"0"})
-private fun round2(v:BigDecimal)=v.setScale(2,RoundingMode.HALF_UP)
-private fun eur(v:BigDecimal)=round2(v).toPlainString().replace('.',',')+" €"
-data class Client(val id:Long,val name:String,val nif:String)
-data class Line(val id:Long,val invoiceId:Long,val desc:String,val qty:BigDecimal,val price:BigDecimal,val vatRate:BigDecimal,val base:BigDecimal,val vat:BigDecimal)
-data class Invoice(val id:Long,val number:String,val date:String,val client:String,val nif:String,val irpfRate:BigDecimal,val base:BigDecimal,val vat:BigDecimal,val irpf:BigDecimal,val total:BigDecimal)
+private fun bd(s: String) = BigDecimal(s.replace(',', '.').ifBlank { "0" })
+private fun r2(v: BigDecimal) = v.setScale(2, RoundingMode.HALF_UP)
+private fun euro(v: BigDecimal) = r2(v).toPlainString().replace('.', ',') + " €"
 
-class MainActivity:Activity(){
- private lateinit var db:Db; private lateinit var body:LinearLayout; private var pendingBytes=ByteArray(0)
- override fun onCreate(b:Bundle?){super.onCreate(b);db=Db(this);home()}
- private fun shell(t:String){val root=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(22,26,22,18)};root.addView(TextView(this).apply{text="MI_FACTUR";textSize=28f;setTextColor(Color.rgb(11,107,203))});val nav=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL};listOf("Inicio","Clientes","Facturas").forEach{n->nav.addView(btn(n){when(n){"Inicio"->home();"Clientes"->clients();else->invoices()}},LinearLayout.LayoutParams(0,-2,1f))};root.addView(nav);root.addView(TextView(this).apply{text=t;textSize=21f;setPadding(0,14,0,8)});body=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL};root.addView(ScrollView(this).apply{addView(body)},LinearLayout.LayoutParams(-1,0,1f));setContentView(root)}
- private fun home(){shell("Resumen");body.addView(TextView(this).apply{text="Clientes: ${db.clients().size}\nFacturas: ${db.invoices().size}";textSize=20f});body.addView(btn("+ Cliente"){clientDialog()});body.addView(btn("+ Factura"){invoiceDialog()})}
- private fun clients(){shell("Clientes");body.addView(btn("+ Nuevo cliente"){clientDialog()});db.clients().forEach{body.addView(TextView(this).apply{text="${it.name} · ${it.nif}";textSize=17f;setPadding(8,14,8,14)})}}
- private fun clientDialog(){val f=form();val n=input("Nombre/Razón social");val nif=input("NIF/CIF");f.addView(n);f.addView(nif);AlertDialog.Builder(this).setTitle("Nuevo cliente").setView(f).setPositiveButton("Guardar"){_,_->if(n.text.isNotBlank()){db.addClient(n.text.toString(),nif.text.toString());clients()}}.setNegativeButton("Cancelar",null).show()}
- private fun invoiceDialog(){val cs=db.clients();if(cs.isEmpty()){toast("Crea primero un cliente");return};val f=form();val sp=Spinner(this).apply{adapter=ArrayAdapter(this@MainActivity,android.R.layout.simple_spinner_dropdown_item,cs.map{it.name})};val irpf=input("IRPF %","15");val box=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL};val drafts=mutableListOf<Array<EditText>>();fun add(){val d=input("Descripción");val q=input("Cantidad","1");val p=input("Precio");val v=input("IVA %","21");box.addView(TextView(this).apply{text="Línea ${drafts.size+1}"});listOf(d,q,p,v).forEach{box.addView(it)};drafts+=arrayOf(d,q,p,v)};f.addView(sp);f.addView(irpf);f.addView(box);add();f.addView(btn("+ Línea"){add()});val scroll=ScrollView(this).apply{addView(f)};AlertDialog.Builder(this).setTitle("Nueva factura").setView(scroll).setPositiveButton("Guardar"){_,_->try{db.addInvoice(cs[sp.selectedItemPosition],bd(irpf.text.toString()),drafts.map{arrayOf(it[0].text.toString(),it[1].text.toString(),it[2].text.toString(),it[3].text.toString())});invoices()}catch(e:Exception){toast("Revisa líneas e importes")}}.setNegativeButton("Cancelar",null).show()}
- private fun invoices(){shell("Facturas");body.addView(btn("+ Nueva factura"){invoiceDialog()});db.invoices().forEach{i->val ls=db.lines(i.id);val panel=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(12,12,12,12);setBackgroundColor(Color.rgb(245,247,250))};panel.addView(TextView(this).apply{text="${i.number} · ${i.date}\n${i.client}\n"+ls.joinToString("\n"){"• ${it.desc}: ${it.qty} × ${eur(it.price)} · IVA ${it.vatRate}%"}+"\nBase ${eur(i.base)} · IVA ${eur(i.vat)} · IRPF -${eur(i.irpf)}\nTOTAL ${eur(i.total)}"});val row=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL};row.addView(btn("PDF"){savePdf(i,ls)},LinearLayout.LayoutParams(0,-2,1f));row.addView(btn("XML"){saveXml(i,ls)},LinearLayout.LayoutParams(0,-2,1f));panel.addView(row);body.addView(panel,LinearLayout.LayoutParams(-1,-2).apply{setMargins(0,0,0,12)})}}
- private fun qrUrl(i:Invoice)="https://www2.agenciatributaria.gob.es/wlpl/TIKE-CONT/ValidarQR?nif=${enc(i.nif)}&numserie=${enc(i.number)}&fecha=${enc(i.date)}&importe=${round2(i.total).toPlainString()}"
- private fun enc(s:String)=java.net.URLEncoder.encode(s,"UTF-8")
- private fun qr(s:String):Bitmap{val m=QRCodeWriter().encode(s,BarcodeFormat.QR_CODE,180,180);return Bitmap.createBitmap(180,180,Bitmap.Config.RGB_565).apply{for(y in 0 until 180)for(x in 0 until 180)setPixel(x,y,if(m[x,y])Color.BLACK else Color.WHITE)}}
- private fun savePdf(i:Invoice,ls:List<Line>){val doc=PdfDocument();val page=doc.startPage(PdfDocument.PageInfo.Builder(595,842,1).create());val c=page.canvas;val p=Paint(Paint.ANTI_ALIAS_FLAG);fun tx(s:String,y:Float,size:Float=12f){p.color=Color.BLACK;p.textSize=size;c.drawText(s,45f,y,p)};tx("MI_FACTUR - FACTURA",50f,24f);tx("Factura ${i.number} · ${i.date}",85f,15f);tx("Cliente: ${i.client} · ${i.nif}",110f);var y=155f;ls.forEach{tx("${it.desc}  ${it.qty} x ${eur(it.price)}  IVA ${it.vatRate}%",y);y+=25};tx("Base: ${eur(i.base)}",y+20);tx("IVA: ${eur(i.vat)}",y+45);tx("IRPF (${i.irpfRate}%): -${eur(i.irpf)}",y+70);tx("TOTAL: ${eur(i.total)}",y+105,18f);c.drawBitmap(qr(qrUrl(i)),null,RectF(365f,625f,545f,805f),p);doc.finishPage(page);val f=File(cacheDir,"${i.number}.pdf");FileOutputStream(f).use{doc.writeTo(it)};doc.close();saveDocument("${i.number}.pdf",f.readBytes(),"application/pdf")}
- private fun saveXml(i: Invoice, ls: List<Line>) {
-    fun xmlEscape(s: String): String =
-        s.replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace("\"", "&quot;")
+data class Client(val id: Long, val name: String, val nif: String, val email: String)
+data class Invoice(val id: Long, val number: String, val date: String, val client: String, val nif: String, val irpfRate: BigDecimal, val base: BigDecimal, val vat: BigDecimal, val irpf: BigDecimal, val total: BigDecimal, val status: String)
+data class Line(val id: Long, val invoiceId: Long, val description: String, val qty: BigDecimal, val price: BigDecimal, val vatRate: BigDecimal, val base: BigDecimal, val vat: BigDecimal)
 
-    val rows = ls.joinToString("") { line ->
-        """
-        <Linea>
-            <Descripcion>${xmlEscape(line.desc)}</Descripcion>
-            <Cantidad>${line.qty.toPlainString()}</Cantidad>
-            <Precio>${round2(line.price).toPlainString()}</Precio>
-            <TipoIVA>${line.vatRate.toPlainString()}</TipoIVA>
-            <Base>${round2(line.base).toPlainString()}</Base>
-            <CuotaIVA>${round2(line.vat).toPlainString()}</CuotaIVA>
-        </Linea>
-        """.trimIndent()
+class MainActivity : Activity() {
+    private lateinit var db: Db
+    private lateinit var body: LinearLayout
+    private var pendingBytes = ByteArray(0)
+
+    private val blue = Color.rgb(37, 99, 235)
+    private val navy = Color.rgb(15, 23, 42)
+    private val slate = Color.rgb(71, 85, 105)
+    private val bg = Color.rgb(248, 250, 252)
+    private val green = Color.rgb(22, 163, 74)
+    private val amber = Color.rgb(217, 119, 6)
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        db = Db(this)
+        showHome()
     }
 
-    val xml = """
-        <?xml version="1.0" encoding="UTF-8"?>
-        <Factura>
-            <Numero>${xmlEscape(i.number)}</Numero>
-            <Fecha>${xmlEscape(i.date)}</Fecha>
-            <Cliente>${xmlEscape(i.client)}</Cliente>
-            <NIF>${xmlEscape(i.nif)}</NIF>
-            <Lineas>
-                $rows
-            </Lineas>
-            <Base>${round2(i.base).toPlainString()}</Base>
-            <IVA>${round2(i.vat).toPlainString()}</IVA>
-            <IRPF>${round2(i.irpf).toPlainString()}</IRPF>
-            <Total>${round2(i.total).toPlainString()}</Total>
-            <QR>${xmlEscape(qrUrl(i))}</QR>
-        </Factura>
-    """.trimIndent()
+    private fun rounded(color: Int, radius: Float = 22f): GradientDrawable = GradientDrawable().apply {
+        setColor(color)
+        cornerRadius = radius
+    }
 
-    saveDocument(
-        "${i.number}.xml",
-        xml.toByteArray(Charsets.UTF_8),
-        "application/xml"
-    )
+    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+
+    private fun shell(title: String, subtitle: String) {
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(bg)
+        }
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(22), dp(24), dp(22), dp(18))
+            background = rounded(Color.WHITE, 0f)
+        }
+        header.addView(ImageView(this).apply {
+            setImageResource(com.francisco.mifactur.R.drawable.mi_logo)
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
+            adjustViewBounds = true
+            contentDescription = "Logotipo MI_FACTUR"
+        }, LinearLayout.LayoutParams(-1, dp(105)).apply { setMargins(0, 0, 0, dp(8)) })
+        header.addView(TextView(this).apply {
+            text = "MI_FACTUR"
+            textSize = 29f
+            setTextColor(blue)
+            setTypeface(typeface, Typeface.BOLD)
+        })
+        header.addView(TextView(this).apply {
+            text = "Tu facturación de autónomo, más fácil"
+            textSize = 14f
+            setTextColor(slate)
+        })
+        val nav = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(16), 0, 0)
+        }
+        nav.addView(navButton("⌂\nInicio") { showHome() }, LinearLayout.LayoutParams(0, dp(58), 1f))
+        nav.addView(navButton("♙\nClientes") { showClients() }, LinearLayout.LayoutParams(0, dp(58), 1f))
+        nav.addView(navButton("▤\nFacturas") { showInvoices() }, LinearLayout.LayoutParams(0, dp(58), 1f))
+        header.addView(nav)
+        root.addView(header)
+
+        val scroll = ScrollView(this)
+        body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(18), dp(18), dp(40))
+        }
+        body.addView(TextView(this).apply {
+            text = title
+            textSize = 24f
+            setTextColor(navy)
+            setTypeface(typeface, Typeface.BOLD)
+        })
+        body.addView(TextView(this).apply {
+            text = subtitle
+            textSize = 14f
+            setTextColor(slate)
+            setPadding(0, dp(2), 0, dp(16))
+        })
+        scroll.addView(body)
+        root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        setContentView(root)
+    }
+
+    private fun navButton(label: String, action: () -> Unit) = TextView(this).apply {
+        text = label
+        gravity = Gravity.CENTER
+        textSize = 12f
+        setTextColor(blue)
+        setPadding(dp(4), dp(5), dp(4), dp(5))
+        setOnClickListener { action() }
+    }
+
+    private fun primaryButton(label: String, action: () -> Unit) = TextView(this).apply {
+        text = label
+        gravity = Gravity.CENTER
+        textSize = 16f
+        setTextColor(Color.WHITE)
+        setTypeface(typeface, Typeface.BOLD)
+        background = rounded(blue, dp(14).toFloat())
+        setPadding(dp(16), dp(14), dp(16), dp(14))
+        setOnClickListener { action() }
+    }
+
+    private fun softButton(label: String, action: () -> Unit) = TextView(this).apply {
+        text = label
+        gravity = Gravity.CENTER
+        textSize = 14f
+        setTextColor(blue)
+        background = rounded(Color.rgb(239, 246, 255), dp(12).toFloat())
+        setPadding(dp(12), dp(11), dp(12), dp(11))
+        setOnClickListener { action() }
+    }
+
+    private fun card(): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(18), dp(16), dp(18), dp(16))
+        background = rounded(Color.WHITE, dp(18).toFloat())
+        elevation = dp(2).toFloat()
+    }
+
+    private fun addCard(view: View) {
+        body.addView(view, LinearLayout.LayoutParams(-1, -2).apply { setMargins(0, 0, 0, dp(12)) })
+    }
+
+    private fun statCard(label: String, value: String, accent: Int): LinearLayout = card().apply {
+        addView(TextView(this@MainActivity).apply { text = label; textSize = 13f; setTextColor(slate) })
+        addView(TextView(this@MainActivity).apply {
+            text = value; textSize = 24f; setTextColor(accent); setTypeface(typeface, Typeface.BOLD); setPadding(0, dp(4), 0, 0)
+        })
+    }
+
+    private fun showHome() {
+        shell("Resumen", "Una vista rápida de tu negocio")
+        val invoices = db.invoices()
+        val total = r2(invoices.fold(BigDecimal.ZERO) { a, i -> a + i.total })
+        val paid = invoices.count { it.status == "Pagada" }
+        val pending = invoices.count { it.status == "Pendiente" }
+
+        val row1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        row1.addView(statCard("FACTURAS", invoices.size.toString(), blue), LinearLayout.LayoutParams(0, -2, 1f).apply { setMargins(0, 0, dp(6), 0) })
+        row1.addView(statCard("FACTURADO", euro(total), green), LinearLayout.LayoutParams(0, -2, 1f).apply { setMargins(dp(6), 0, 0, 0) })
+        addCard(row1)
+
+        val row2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        row2.addView(statCard("PAGADAS", paid.toString(), green), LinearLayout.LayoutParams(0, -2, 1f).apply { setMargins(0, 0, dp(6), 0) })
+        row2.addView(statCard("PENDIENTES", pending.toString(), amber), LinearLayout.LayoutParams(0, -2, 1f).apply { setMargins(dp(6), 0, 0, 0) })
+        addCard(row2)
+
+        addCard(primaryButton("＋ Crear nueva factura") { invoiceDialog() })
+        addCard(softButton("＋ Añadir cliente") { clientDialog() })
+
+        if (invoices.isNotEmpty()) {
+            body.addView(TextView(this).apply {
+                text = "Últimas facturas"; textSize = 18f; setTextColor(navy); setTypeface(typeface, Typeface.BOLD); setPadding(0, dp(8), 0, dp(10))
+            })
+            invoices.take(3).forEach { addCard(invoiceCard(it)) }
+        }
+    }
+
+    private fun showClients() {
+        shell("Clientes", "Gestiona tus clientes y datos fiscales")
+        addCard(primaryButton("＋ Nuevo cliente") { clientDialog() })
+        db.clients().forEach { c ->
+            addCard(card().apply {
+                addView(TextView(this@MainActivity).apply { text = c.name; textSize = 18f; setTextColor(navy); setTypeface(typeface, Typeface.BOLD) })
+                addView(TextView(this@MainActivity).apply { text = "NIF/CIF  ${c.nif}\n${c.email}"; textSize = 14f; setTextColor(slate); setPadding(0, dp(6), 0, 0) })
+            })
+        }
+    }
+
+    private fun showInvoices() {
+        shell("Facturas", "Consulta, exporta y genera documentos")
+        addCard(primaryButton("＋ Nueva factura") { invoiceDialog() })
+        db.invoices().forEach { addCard(invoiceCard(it)) }
+    }
+
+    private fun invoiceCard(i: Invoice): LinearLayout {
+        val lines = db.lines(i.id)
+        return card().apply {
+            val top = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL }
+            top.addView(TextView(this@MainActivity).apply {
+                text = i.number; textSize = 17f; setTextColor(navy); setTypeface(typeface, Typeface.BOLD)
+            }, LinearLayout.LayoutParams(0, -2, 1f))
+            top.addView(TextView(this@MainActivity).apply {
+                text = i.status
+                textSize = 12f
+                setTextColor(if (i.status == "Pagada") green else amber)
+                background = rounded(if (i.status == "Pagada") Color.rgb(240,253,244) else Color.rgb(255,247,237), dp(10).toFloat())
+                setPadding(dp(10), dp(5), dp(10), dp(5))
+            })
+            addView(top)
+            addView(TextView(this@MainActivity).apply { text = "${i.date} · ${i.client}"; textSize = 14f; setTextColor(slate); setPadding(0, dp(5), 0, dp(10)) })
+            lines.forEach { l ->
+                addView(TextView(this@MainActivity).apply {
+                    text = "${l.description}   ${l.qty.stripTrailingZeros().toPlainString()} × ${euro(l.price)}   IVA ${l.vatRate.stripTrailingZeros().toPlainString()}%"
+                    textSize = 13f; setTextColor(slate); setPadding(0, dp(3), 0, dp(3))
+                })
+            }
+            addView(TextView(this@MainActivity).apply {
+                text = "TOTAL   ${euro(i.total)}"
+                textSize = 20f; setTextColor(navy); setTypeface(typeface, Typeface.BOLD); setPadding(0, dp(12), 0, dp(10))
+            })
+            val actions = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL }
+            actions.addView(softButton("PDF") { savePdf(i, lines) }, LinearLayout.LayoutParams(0, -2, 1f).apply { setMargins(0, 0, dp(5), 0) })
+            actions.addView(softButton("XML") { saveXml(i, lines) }, LinearLayout.LayoutParams(0, -2, 1f).apply { setMargins(dp(5), 0, 0, 0) })
+            addView(actions)
+        }
+    }
+
+    private fun clientDialog() {
+        val f = form()
+        val n = input("Nombre o razón social")
+        val nif = input("NIF / CIF")
+        val email = input("Email")
+        listOf(n, nif, email).forEach { f.addView(it) }
+        AlertDialog.Builder(this).setTitle("Nuevo cliente").setView(f)
+            .setPositiveButton("Guardar") { _, _ -> if (n.text.isNotBlank()) { db.addClient(n.text.toString(), nif.text.toString(), email.text.toString()); showClients() } }
+            .setNegativeButton("Cancelar", null).show()
+    }
+
+    private fun invoiceDialog() {
+        val clients = db.clients()
+        if (clients.isEmpty()) { toast("Primero crea un cliente"); return }
+
+        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(22), dp(8), dp(22), dp(18)) }
+        val clientLabel = TextView(this).apply { text = "1  Cliente"; textSize = 18f; setTextColor(navy); setTypeface(typeface, Typeface.BOLD) }
+        val sp = Spinner(this).apply { adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, clients.map { it.name }) }
+        root.addView(clientLabel); root.addView(sp)
+
+        root.addView(TextView(this).apply { text = "2  Conceptos de la factura"; textSize = 18f; setTextColor(navy); setTypeface(typeface, Typeface.BOLD); setPadding(0, dp(18), 0, dp(6)) })
+        val linesBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val drafts = mutableListOf<Array<EditText>>()
+        val summary = TextView(this).apply { textSize = 16f; setTextColor(navy); setPadding(dp(14), dp(14), dp(14), dp(14)); background = rounded(Color.rgb(239,246,255), dp(14).toFloat()) }
+        val irpf = input("Ej.: IRPF 15%", "15")
+        val status = Spinner(this).apply { adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, listOf("Pendiente", "Pagada", "Vencida")) }
+
+        fun refreshSummary() {
+            try {
+                val valid = drafts.filter { it[0].text.isNotBlank() && it[1].text.isNotBlank() && it[2].text.isNotBlank() && it[3].text.isNotBlank() }
+                val bases = valid.map { r2(bd(it[1].text.toString()) * bd(it[2].text.toString())) }
+                val base = r2(bases.fold(BigDecimal.ZERO) { a,b -> a+b })
+                val vat = r2(valid.mapIndexed { idx, a -> r2(bases[idx] * bd(a[3].text.toString()) / BigDecimal("100")) }.fold(BigDecimal.ZERO) { a,b -> a+b })
+                val retention = r2(base * bd(irpf.text.toString()) / BigDecimal("100"))
+                summary.text = "Base   ${euro(base)}\nIVA     ${euro(vat)}\nIRPF   -${euro(retention)}\n\nTOTAL   ${euro(r2(base + vat - retention))}"
+            } catch (_:Exception) { summary.text = "Completa los conceptos para ver el total" }
+        }
+
+        fun addLine() {
+            val card = card()
+            val n = drafts.size + 1
+            card.addView(TextView(this).apply { text = "Concepto $n"; textSize = 16f; setTextColor(blue); setTypeface(typeface, Typeface.BOLD) })
+            val d = input("Ej.: Mantenimiento EDAR noviembre")
+            val q = input("Ej.: 2", "1")
+            val p = input("Ej.: 125,50 €")
+            val v = input("Ej.: 21%", "21")
+            listOf(d,q,p,v).forEach { e -> card.addView(e); e.setOnFocusChangeListener { _,has -> if(!has) refreshSummary() } }
+            val remove = softButton("Eliminar este concepto") {
+                if (drafts.size > 1) { val idx=drafts.indexOfFirst { it[0]===d }; if(idx>=0) drafts.removeAt(idx); linesBox.removeView(card); refreshSummary() }
+                else toast("La factura necesita al menos un concepto")
+            }
+            card.addView(remove)
+            drafts += arrayOf(d,q,p,v)
+            linesBox.addView(card, LinearLayout.LayoutParams(-1,-2).apply{setMargins(0,0,0,dp(10))})
+        }
+        root.addView(linesBox); addLine()
+        root.addView(softButton("＋ Añadir otro concepto") { addLine() })
+
+        root.addView(TextView(this).apply { text = "3  Impuestos y estado"; textSize = 18f; setTextColor(navy); setTypeface(typeface, Typeface.BOLD); setPadding(0, dp(18), 0, dp(6)) })
+        root.addView(irpf); root.addView(TextView(this).apply{text="Estado de cobro";setTextColor(slate);setPadding(0,dp(8),0,0)}); root.addView(status)
+        irpf.setOnFocusChangeListener { _,has -> if(!has) refreshSummary() }
+        root.addView(TextView(this).apply { text = "4  Resumen"; textSize = 18f; setTextColor(navy); setTypeface(typeface, Typeface.BOLD); setPadding(0, dp(18), 0, dp(6)) })
+        root.addView(summary); refreshSummary()
+
+        root.addView(primaryButton("Vista previa antes de confirmar") {
+            try {
+                refreshSummary()
+                val clientName = clients[sp.selectedItemPosition].name
+                val lineText = drafts.mapIndexed { idx,a ->
+                    val desc=a[0].text.toString().ifBlank { "Concepto ${idx+1}" }; val qty=a[1].text.toString(); val price=a[2].text.toString(); val vat=a[3].text.toString()
+                    "${idx+1}. $desc\n   $qty × $price € · IVA $vat%"
+                }.joinToString("\n\n")
+                AlertDialog.Builder(this).setTitle("Vista previa de factura").setMessage("Cliente: $clientName\nEstado: ${status.selectedItem}\n\n$lineText\n\n${summary.text}\n\nSi algo no está bien, pulsa EDITAR y vuelve a los campos.").setPositiveButton("CONFIRMAR Y GUARDAR") { _,_ ->
+                    try { val parsed=drafts.map { require(it[0].text.isNotBlank()); arrayOf(it[0].text.toString(),it[1].text.toString(),it[2].text.toString(),it[3].text.toString()) }; db.addInvoice(clients[sp.selectedItemPosition],bd(irpf.text.toString()),status.selectedItem.toString(),parsed); showInvoices() } catch(e:Exception) { toast("Revisa los campos antes de confirmar") }
+                }.setNegativeButton("EDITAR", null).show()
+            } catch(e:Exception) { toast("Completa los conceptos antes de abrir la vista previa") }
+        })
+
+        val scroll = ScrollView(this).apply { addView(root) }
+        AlertDialog.Builder(this).setTitle("Crear factura").setView(scroll)
+            .setPositiveButton("Cerrar") { _, _ -> }.setNegativeButton("Cancelar", null).show()
+    }
+
+    private fun qrUrl(i: Invoice) = "https://www2.agenciatributaria.gob.es/wlpl/TIKE-CONT/ValidarQR?nif=${enc(i.nif)}&numserie=${enc(i.number)}&fecha=${enc(i.date)}&importe=${r2(i.total).toPlainString()}"
+    private fun enc(s: String) = java.net.URLEncoder.encode(s, "UTF-8")
+    private fun qr(s: String): Bitmap {
+        val m = QRCodeWriter().encode(s, BarcodeFormat.QR_CODE, 180, 180)
+        return Bitmap.createBitmap(180, 180, Bitmap.Config.RGB_565).apply { for (y in 0 until 180) for (x in 0 until 180) setPixel(x, y, if (m[x, y]) Color.BLACK else Color.WHITE) }
+    }
+
+    private fun savePdf(i: Invoice, lines: List<Line>) {
+        val doc = PdfDocument(); val page = doc.startPage(PdfDocument.PageInfo.Builder(595, 842, 1).create()); val c = page.canvas; val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        fun tx(s: String, y: Float, size: Float = 12f, bold: Boolean = false) { p.color = Color.BLACK; p.textSize = size; p.typeface = if (bold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT; c.drawText(s, 45f, y, p) }
+        val logo = BitmapFactory.decodeResource(resources, com.francisco.mifactur.R.drawable.mi_logo)
+        c.drawBitmap(logo, null, RectF(435f, 20f, 550f, 100f), p)
+        tx("MI_FACTUR", 50f, 25f, true); tx("FACTURA ${i.number}", 84f, 17f, true); tx("${i.date} · ${i.client} · ${i.nif}", 108f)
+        var y = 150f; lines.forEach { tx("${it.description}  ${it.qty} x ${euro(it.price)}  IVA ${it.vatRate}%", y); y += 24 }
+        tx("Base: ${euro(i.base)}", y + 24); tx("IVA: ${euro(i.vat)}", y + 48); tx("IRPF (${i.irpfRate}%): -${euro(i.irpf)}", y + 72); tx("TOTAL: ${euro(i.total)}", y + 108, 19f, true)
+        c.drawBitmap(qr(qrUrl(i)), null, RectF(365f, 625f, 545f, 805f), p); doc.finishPage(page)
+        val file = File(cacheDir, "${i.number}.pdf"); FileOutputStream(file).use { doc.writeTo(it) }; doc.close(); saveDocument("${i.number}.pdf", file.readBytes(), "application/pdf")
+    }
+
+    private fun saveXml(i: Invoice, lines: List<Line>) {
+        fun esc(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
+        val rows = lines.joinToString("") { "<Linea><Descripcion>${esc(it.description)}</Descripcion><Cantidad>${it.qty}</Cantidad><Precio>${r2(it.price)}</Precio><IVA>${it.vatRate}</IVA><Base>${r2(it.base)}</Base><CuotaIVA>${r2(it.vat)}</CuotaIVA></Linea>" }
+        val xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Factura><Numero>${esc(i.number)}</Numero><Fecha>${esc(i.date)}</Fecha><Cliente>${esc(i.client)}</Cliente><NIF>${esc(i.nif)}</NIF><Lineas>$rows</Lineas><Base>${r2(i.base)}</Base><IVA>${r2(i.vat)}</IVA><IRPF>${r2(i.irpf)}</IRPF><Total>${r2(i.total)}</Total><QR>${esc(qrUrl(i))}</QR></Factura>"
+        saveDocument("${i.number}.xml", xml.toByteArray(Charsets.UTF_8), "application/xml")
+    }
+
+    private fun saveDocument(name: String, data: ByteArray, type: String) { pendingBytes = data; startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply { addCategory(Intent.CATEGORY_OPENABLE); this.type = type; putExtra(Intent.EXTRA_TITLE, name) }, 77) }
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) { super.onActivityResult(requestCode, resultCode, data); if (requestCode == 77 && resultCode == RESULT_OK) data?.data?.let { uri -> contentResolver.openOutputStream(uri)?.use { it.write(pendingBytes) }; toast("Archivo guardado") } }
+
+    private fun form() = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(24), dp(8), dp(24), 0) }
+    private fun input(hintText: String, value: String = "") = EditText(this).apply { hint = hintText; setText(value); setPadding(dp(12), dp(10), dp(12), dp(10)) }
+    private fun toast(t: String) = Toast.makeText(this, t, Toast.LENGTH_LONG).show()
 }
- private fun saveDocument(name:String,data:ByteArray,type:String){pendingBytes=data;startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply{addCategory(Intent.CATEGORY_OPENABLE);this.type=type;putExtra(Intent.EXTRA_TITLE,name)},77)}
- override fun onActivityResult(req:Int,res:Int,data:Intent?){super.onActivityResult(req,res,data);if(req==77&&res==RESULT_OK)data?.data?.let{uri->contentResolver.openOutputStream(uri)?.use{it.write(pendingBytes)};toast("Archivo guardado")}}
- private fun form()=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(24,8,24,0)};private fun input(h:String,v:String="")=EditText(this).apply{hint=h;setText(v);setPadding(10,10,10,10)};private fun btn(t:String,a:()->Unit)=Button(this).apply{text=t;setOnClickListener{a()}};private fun toast(t:String)=Toast.makeText(this,t,Toast.LENGTH_LONG).show()}
 
-class Db(c:Context):SQLiteOpenHelper(c,"mifactur3.db",null,1){override fun onCreate(d:SQLiteDatabase){d.execSQL("CREATE TABLE clients(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT,nif TEXT)");d.execSQL("CREATE TABLE invoices(id INTEGER PRIMARY KEY AUTOINCREMENT,number TEXT,date TEXT,client_id INTEGER,irpf_rate TEXT,base TEXT,vat TEXT,irpf TEXT,total TEXT)");d.execSQL("CREATE TABLE lines(id INTEGER PRIMARY KEY AUTOINCREMENT,invoice_id INTEGER,description TEXT,qty TEXT,price TEXT,vat_rate TEXT,base TEXT,vat TEXT)")};override fun onUpgrade(d:SQLiteDatabase,a:Int,b:Int){}
- fun addClient(n:String,nif:String){writableDatabase.execSQL("INSERT INTO clients(name,nif) VALUES(?,?)",arrayOf(n,nif))};fun clients():List<Client>{val out=mutableListOf<Client>();readableDatabase.rawQuery("SELECT id,name,nif FROM clients ORDER BY name",null).use{while(it.moveToNext())out+=Client(it.getLong(0),it.getString(1),it.getString(2)?:"")};return out}
- fun addInvoice(c:Client,irpfRate:BigDecimal,raw:List<Array<String>>){val ls=raw.map{a->require(a[0].isNotBlank());val q=bd(a[1]);val p=bd(a[2]);val vr=bd(a[3]);require(q>BigDecimal.ZERO&&p>=BigDecimal.ZERO);val b=round2(q*p);val vat=round2(b*vr/BigDecimal("100"));arrayOf(a[0],q.toPlainString(),p.toPlainString(),vr.toPlainString(),b.toPlainString(),vat.toPlainString())};val base=round2(ls.fold(BigDecimal.ZERO){a,l->a+bd(l[4])});val vat=round2(ls.fold(BigDecimal.ZERO){a,l->a+bd(l[5])});val irpf=round2(base*irpfRate/BigDecimal("100"));val total=round2(base+vat-irpf);val number="F-${Calendar.getInstance().get(Calendar.YEAR)}-${String.format(Locale.US,"%04d",invoices().size+1)}";val date=SimpleDateFormat("dd-MM-yyyy",Locale.US).format(Date());val d=writableDatabase;d.beginTransaction();try{val cv=ContentValues().apply{put("number",number);put("date",date);put("client_id",c.id);put("irpf_rate",irpfRate.toPlainString());put("base",base.toPlainString());put("vat",vat.toPlainString());put("irpf",irpf.toPlainString());put("total",total.toPlainString())};val id=d.insertOrThrow("invoices",null,cv);ls.forEach{l->d.execSQL("INSERT INTO lines(invoice_id,description,qty,price,vat_rate,base,vat) VALUES(?,?,?,?,?,?,?)",arrayOf(id,l[0],l[1],l[2],l[3],l[4],l[5]))};d.setTransactionSuccessful()}finally{d.endTransaction()}}
- fun invoices():List<Invoice>{val out=mutableListOf<Invoice>();readableDatabase.rawQuery("SELECT i.id,i.number,i.date,c.name,c.nif,i.irpf_rate,i.base,i.vat,i.irpf,i.total FROM invoices i JOIN clients c ON c.id=i.client_id ORDER BY i.id DESC",null).use{while(it.moveToNext())out+=Invoice(it.getLong(0),it.getString(1),it.getString(2),it.getString(3),it.getString(4)?:"",bd(it.getString(5)),bd(it.getString(6)),bd(it.getString(7)),bd(it.getString(8)),bd(it.getString(9)))};return out}
- fun lines(id:Long):List<Line>{val out=mutableListOf<Line>();readableDatabase.rawQuery("SELECT id,invoice_id,description,qty,price,vat_rate,base,vat FROM lines WHERE invoice_id=? ORDER BY id",arrayOf(id.toString())).use{while(it.moveToNext())out+=Line(it.getLong(0),it.getLong(1),it.getString(2),bd(it.getString(3)),bd(it.getString(4)),bd(it.getString(5)),bd(it.getString(6)),bd(it.getString(7)))};return out}}
+class Db(c: Context) : SQLiteOpenHelper(c, "mifactur_visual.db", null, 1) {
+    override fun onCreate(d: SQLiteDatabase) {
+        d.execSQL("CREATE TABLE clients(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT,nif TEXT,email TEXT)")
+        d.execSQL("CREATE TABLE invoices(id INTEGER PRIMARY KEY AUTOINCREMENT,number TEXT,date TEXT,client_id INTEGER,irpf_rate TEXT,base TEXT,vat TEXT,irpf TEXT,total TEXT,status TEXT)")
+        d.execSQL("CREATE TABLE lines(id INTEGER PRIMARY KEY AUTOINCREMENT,invoice_id INTEGER,description TEXT,qty TEXT,price TEXT,vat_rate TEXT,base TEXT,vat TEXT)")
+    }
+    override fun onUpgrade(d: SQLiteDatabase, oldVersion: Int, newVersion: Int) {}
+    fun addClient(n: String, nif: String, email: String) { writableDatabase.execSQL("INSERT INTO clients(name,nif,email) VALUES(?,?,?)", arrayOf(n, nif, email)) }
+    fun clients(): List<Client> { val out = mutableListOf<Client>(); readableDatabase.rawQuery("SELECT id,name,nif,email FROM clients ORDER BY name", null).use { while (it.moveToNext()) out += Client(it.getLong(0), it.getString(1), it.getString(2) ?: "", it.getString(3) ?: "") }; return out }
+    fun addInvoice(c: Client, irpfRate: BigDecimal, status: String, raw: List<Array<String>>) {
+        val parsed = raw.map { a -> require(a[0].isNotBlank()); val q = bd(a[1]); val p = bd(a[2]); val vr = bd(a[3]); require(q > BigDecimal.ZERO && p >= BigDecimal.ZERO); val b = r2(q * p); val vat = r2(b * vr / BigDecimal("100")); arrayOf(a[0], q.toPlainString(), p.toPlainString(), vr.toPlainString(), b.toPlainString(), vat.toPlainString()) }
+        val base = r2(parsed.fold(BigDecimal.ZERO) { a, l -> a + bd(l[4]) }); val vat = r2(parsed.fold(BigDecimal.ZERO) { a, l -> a + bd(l[5]) }); val irpf = r2(base * irpfRate / BigDecimal("100")); val total = r2(base + vat - irpf)
+        val number = "F-${Calendar.getInstance().get(Calendar.YEAR)}-${String.format(Locale.US, "%04d", invoices().size + 1)}"; val date = SimpleDateFormat("dd-MM-yyyy", Locale.US).format(Date()); val d = writableDatabase; d.beginTransaction()
+        try { val cv = ContentValues().apply { put("number", number); put("date", date); put("client_id", c.id); put("irpf_rate", irpfRate.toPlainString()); put("base", base.toPlainString()); put("vat", vat.toPlainString()); put("irpf", irpf.toPlainString()); put("total", total.toPlainString()); put("status", status) }; val id = d.insertOrThrow("invoices", null, cv); parsed.forEach { l -> d.execSQL("INSERT INTO lines(invoice_id,description,qty,price,vat_rate,base,vat) VALUES(?,?,?,?,?,?,?)", arrayOf(id, l[0], l[1], l[2], l[3], l[4], l[5])) }; d.setTransactionSuccessful() } finally { d.endTransaction() }
+    }
+    fun invoices(): List<Invoice> { val out = mutableListOf<Invoice>(); readableDatabase.rawQuery("SELECT i.id,i.number,i.date,c.name,c.nif,i.irpf_rate,i.base,i.vat,i.irpf,i.total,i.status FROM invoices i JOIN clients c ON c.id=i.client_id ORDER BY i.id DESC", null).use { while (it.moveToNext()) out += Invoice(it.getLong(0), it.getString(1), it.getString(2), it.getString(3), it.getString(4) ?: "", bd(it.getString(5)), bd(it.getString(6)), bd(it.getString(7)), bd(it.getString(8)), bd(it.getString(9)), it.getString(10) ?: "Pendiente") }; return out }
+    fun lines(id: Long): List<Line> { val out = mutableListOf<Line>(); readableDatabase.rawQuery("SELECT id,invoice_id,description,qty,price,vat_rate,base,vat FROM lines WHERE invoice_id=? ORDER BY id", arrayOf(id.toString())).use { while (it.moveToNext()) out += Line(it.getLong(0), it.getLong(1), it.getString(2), bd(it.getString(3)), bd(it.getString(4)), bd(it.getString(5)), bd(it.getString(6)), bd(it.getString(7))) }; return out }
+}
